@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>粒子巨星 · 手势互动 v2</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#000;font-family:system-ui,-apple-system,sans-serif}
+canvas{display:block}
+#video{
+    position:fixed;right:10px;bottom:10px;
+    width:180px;border:2px solid rgba(255,255,255,0.35);
+    border-radius:10px;transform:scaleX(-1);
+    background:#111;display:none;
+    box-shadow:0 4px 20px rgba(0,0,0,0.5);
+}
+#tip{
+    position:fixed;top:10px;left:10px;
+    color:#ff6622;background:rgba(0,0,0,0.7);
+    padding:10px 14px;font-size:13px;line-height:1.9;
+    border-radius:10px;border:1px solid rgba(255,102,34,0.25);
+    user-select:none;z-index:5;max-width:290px;
+    backdrop-filter:blur(8px);
+}
+#tip .sec{color:#888;font-size:11px;margin-top:6px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px}
+#status{
+    position:fixed;top:10px;right:10px;
+    color:#ddd;background:rgba(0,0,0,0.7);
+    padding:8px 12px;font-size:12px;border-radius:10px;
+    min-width:200px;text-align:right;z-index:5;
+    backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.08);
+}
+#gesture{
+    position:fixed;bottom:14px;left:14px;
+    color:#fff;background:rgba(0,0,0,0.7);
+    padding:8px 16px;font-size:14px;border-radius:10px;
+    z-index:5;backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,0.12);
+    transition:all 0.3s;display:none;
+}
+#themeName{
+    position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    color:#fff;font-size:30px;font-weight:bold;
+    opacity:0;transition:opacity 0.4s;
+    pointer-events:none;z-index:6;
+    text-shadow:0 0 20px currentColor,0 0 40px currentColor;
+}
+#sizeBar{
+    position:fixed;left:14px;bottom:60px;width:8px;height:120px;
+    background:rgba(255,255,255,0.08);border-radius:4px;
+    z-index:5;display:none;overflow:hidden;
+}
+#sizeBarFill{
+    position:fixed;left:14px;width:8px;border-radius:4px;
+    background:linear-gradient(to top,#ff4422,#ffaa22);
+    z-index:5;display:none;transition:bottom 0.08s,height 0.08s;
+}
+#overlay{
+    position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0.85);z-index:10;flex-direction:column;gap:14px;padding:0 20px;
+}
+#overlay .title{color:#ff6622;font-size:24px;font-weight:bold}
+#ovText{color:#999;font-size:13px;max-width:560px;text-align:center;line-height:1.8;min-height:42px}
+#ovText.err{color:#ff5555}
+#startBtn{
+    background:linear-gradient(135deg,#ff6622,#ff8844);color:#fff;border:none;
+    padding:14px 32px;font-size:16px;border-radius:10px;cursor:pointer;
+    box-shadow:0 4px 15px rgba(255,102,34,0.3);transition:all 0.2s;
+}
+#startBtn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 6px 20px rgba(255,102,34,0.4)}
+#startBtn:disabled{opacity:0.5;cursor:default}
+#overlay .kbd{color:#888;font-size:12px;text-align:center;line-height:1.7}
+</style>
+</head>
+<body>
+
+<div id="tip">
+    【手势控制 v2】<br>
+    ✋ 手靠近摄像头 → 粒子放大<br>
+    ✋ 手远离摄像头 → 粒子缩小<br>
+    👋 手左右上下移动 → 星球跟随<br>
+    🔄 手掌旋转 → 星球自转<br>
+    🤏 捏合拇指食指 → 切换颜色主题<br>
+    <div class="sec">键盘：↑↓缩放 ←→旋转 1-5换色 空格特效</div>
+</div>
+
+<div id="status">加载中…</div>
+<div id="gesture"></div>
+<div id="themeName"></div>
+<div id="sizeBar"></div>
+<div id="sizeBarFill"></div>
+<video id="video" autoplay playsinline muted></video>
+
+<div id="overlay">
+    <div class="title">粒子巨星 · 手势互动 v2</div>
+    <div id="ovText">正在加载组件…</div>
+    <button id="startBtn" disabled>加载中…</button>
+    <div class="kbd">没有摄像头？键盘操作：↑/↓ 缩放 ←/→ 旋转 1-5 换色 空格 特效</div>
+</div>
+
+<script>
+'use strict';
+
+/* ========== 脚本加载（双CDN降级） ========== */
+function loadScript(src){
+    return new Promise(function(resolve,reject){
+        var s=document.createElement('script');
+        s.src=src;s.onload=resolve;s.onerror=function(){reject(new Error('加载失败: '+src))};
+        document.head.appendChild(s);
+    });
+}
+async function loadWithFallback(name,urls){
+    var lastErr=null;
+    for(var i=0;i<urls.length;i++){
+        try{await loadScript(urls[i]);return urls[i]}catch(e){lastErr=e}
+    }
+    throw new Error(name+' 加载失败，请检查网络');
+}
+
+/* ========== 颜色主题 ========== */
+var themes=[
+    {name:'🔥 橙色烈焰',primary:0xff4422,glow:0xff6633,ring1:0xffaa66,ring2:0xff6633,css:'#ff6622'},
+    {name:'❄️ 冰蓝星辰',primary:0x2288ff,glow:0x44aaff,ring1:0x66ccff,ring2:0x3399ff,css:'#2288ff'},
+    {name:'🌿 翡翠光华',primary:0x22ff88,glow:0x44ffaa,ring1:0x88ffcc,ring2:0x22dd66,css:'#22ff88'},
+    {name:'💜 紫罗星云',primary:0xaa44ff,glow:0xcc66ff,ring1:0xdd88ff,ring2:0x8822dd,css:'#aa44ff'},
+    {name:'⭐ 金色辉煌',primary:0xffaa22,glow:0xffcc44,ring1:0xffdd77,ring2:0xff8800,css:'#ffaa22'},
+];
+var currentTheme=0;
+
+/* ========== UI ========== */
+var ovText=document.getElementById('ovText');
+var startBtn=document.getElementById('startBtn');
+var statusEl=document.getElementById('status');
+var gestureEl=document.getElementById('gesture');
+var themeNameEl=document.getElementById('themeName');
+var sizeBarEl=document.getElementById('sizeBar');
+var sizeBarFillEl=document.getElementById('sizeBarFill');
+
+function setOvText(msg,isErr){ovText.textContent=msg;ovText.className=isErr?'err':''}
+
+/* ========== 全局状态 ========== */
+var scene=null,threeCamera=null,renderer=null;
+var starBall=null,ring1=null,ring2=null,glowBall=null;
+var sceneReady=false;
+var hands=null,mediapipeReady=false;
+var videoEl=document.getElementById('video');
+
+var params={
+    scaleMin:0.12,
+    scaleMax:2.0,
+    rotGain:7,
+    autoRotateSpeed:0.002,
+    posGain:14,
+    posSmoothing:0.05,
+    scaleSmoothing:0.10
+};
+
+var targetRotY=0,targetScale=0.7,currentScale=0.7;
+var targetPosX=0,targetPosY=0,currentPosX=0,currentPosY=0;
+
+var handDetected=false;
+var rawHandSize=0;
+var palmRot=0,lastPalmRot=0,firstPalmRot=true;
+
+var sizeList=[];
+var MAX_SIZE_SAMPLE=20;
+
+var isPinching=false,wasPinching=false,pinchCooldown=0;
+var PINCH_THRESHOLD=0.06,PINCH_COOLDOWN=45;
+
+var shockwaves=[];
+var themeDisplayTimer=0;
+
+function clamp(v,lo,hi){return v<lo?lo:(v>hi?hi:v)}
+function lerp(a,b,t){return a+(b-a)*t}
+
+/* ========== 场景创建 ========== */
+function createBackStars(count){
+    var geo=new THREE.BufferGeometry(),pos=[];
+    for(var i=0;i<count;i++){
+        var r=60+Math.random()*60,theta=Math.random()*Math.PI*2,phi=Math.acos(2*Math.random()-1);
+        pos.push(r*Math.sin(phi)*Math.cos(theta),r*Math.sin(phi)*Math.sin(theta),r*Math.cos(phi));
+    }
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+    return new THREE.Points(geo,new THREE.PointsMaterial({color:0xffffff,size:0.18,transparent:true,opacity:0.5}));
+}
+
+function createParticleSphere(radius,count,color,size){
+    var geo=new THREE.BufferGeometry(),pos=[];
+    for(var i=0;i<count;i++){
+        var theta=Math.random()*Math.PI*2,phi=Math.acos(2*Math.random()-1);
+        pos.push(radius*Math.sin(phi)*Math.cos(theta),radius*Math.sin(phi)*Math.sin(theta),radius*Math.cos(phi));
+    }
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+    return new THREE.Points(geo,new THREE.PointsMaterial({
+        color:color,size:size,transparent:true,opacity:0.85,
+        sizeAttenuation:true,blending:THREE.AdditiveBlending,depthWrite:false
+    }));
+}
+
+function createRing(r,cnt,color){
+    var geo=new THREE.BufferGeometry(),pos=[];
+    for(var i=0;i<cnt;i++){
+        var ang=i/cnt*Math.PI*2;
+        pos.push(Math.cos(ang)*r,0,Math.sin(ang)*r);
+    }
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+    return new THREE.Points(geo,new THREE.PointsMaterial({
+        color:color,size:0.07,opacity:0.7,transparent:true,
+        blending:THREE.AdditiveBlending,depthWrite:false
+    }));
+}
+
+function initScene(){
+    if(sceneReady)return;
+    scene=new THREE.Scene();
+    threeCamera=new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,1000);
+    renderer=new THREE.WebGLRenderer({antialias:true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    renderer.setSize(window.innerWidth,window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+    threeCamera.position.z=22;
+
+    scene.add(createBackStars(1500));
+
+    var theme=themes[currentTheme];
+    starBall=createParticleSphere(10,40000,theme.primary,0.13);
+    starBall.scale.setScalar(currentScale);
+    scene.add(starBall);
+
+    glowBall=createParticleSphere(11.5,12000,theme.glow,0.22);
+    glowBall.scale.setScalar(currentScale);
+    scene.add(glowBall);
+
+    ring1=createRing(16,1200,theme.ring1);ring1.rotation.x=Math.PI/4;scene.add(ring1);
+    ring2=createRing(19,1500,theme.ring2);ring2.rotation.x=-Math.PI/5;scene.add(ring2);
+
+    sceneReady=true;
+    window.addEventListener('resize',function(){
+        threeCamera.aspect=window.innerWidth/window.innerHeight;
+        threeCamera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth,window.innerHeight);
+    });
+    requestAnimationFrame(animate);
+}
+
+/* ========== 主题切换 ========== */
+function switchTheme(index){
+    if(index===currentTheme||!sceneReady)return;
+    currentTheme=index;
+    var theme=themes[currentTheme];
+    starBall.material.color.setHex(theme.primary);
+    glowBall.material.color.setHex(theme.glow);
+    ring1.material.color.setHex(theme.ring1);
+    ring2.material.color.setHex(theme.ring2);
+
+    themeNameEl.textContent=theme.name;
+    themeNameEl.style.color=theme.css;
+    themeNameEl.style.opacity='1';
+    clearTimeout(themeDisplayTimer);
+    themeDisplayTimer=setTimeout(function(){themeNameEl.style.opacity='0'},1800);
+
+    createShockwave();
+}
+
+/* ========== 冲击波特效 ========== */
+function createShockwave(){
+    if(!scene)return;
+    var theme=themes[currentTheme];
+    var geo=new THREE.RingGeometry(8,8.6,64);
+    var mat=new THREE.MeshBasicMaterial({
+        color:theme.primary,transparent:true,opacity:0.55,
+        side:THREE.DoubleSide,blending:THREE.AdditiveBlending,depthWrite:false
+    });
+    var mesh=new THREE.Mesh(geo,mat);
+    mesh.position.set(currentPosX,currentPosY,0);
+    scene.add(mesh);
+    shockwaves.push({mesh:mesh,life:1.0,speed:0.6+Math.random()*0.5});
+}
+
+function updateShockwaves(dt){
+    for(var i=shockwaves.length-1;i>=0;i--){
+        var sw=shockwaves[i];
+        sw.life-=dt*1.3;
+        var s=sw.mesh.scale.x+sw.speed;
+        sw.mesh.scale.setScalar(s);
+        sw.mesh.material.opacity=Math.max(0,sw.life*0.5);
+        if(sw.life<=0){
+            scene.remove(sw.mesh);
+            sw.mesh.geometry.dispose();
+            sw.mesh.material.dispose();
+            shockwaves.splice(i,1);
+        }
+    }
+}
+
+/* ========== MediaPipe 手势 ========== */
+function initHands(base){
+    if(typeof Hands==='undefined')return;
+    hands=new Hands({locateFile:function(f){return base+f}});
+    hands.setOptions({
+        maxNumHands:1,
+        modelComplexity:0,
+        minDetectionConfidence:0.6,
+        minTrackingConfidence:0.5
+    });
+
+    hands.onResults(function(res){
+        if(!res.multiHandLandmarks||!res.multiHandLandmarks.length){
+            handDetected=false;
+            firstPalmRot=true;
+            gestureEl.style.display='none';
+            sizeBarEl.style.display='none';
+            sizeBarFillEl.style.display='none';
+            statusEl.textContent='未检测到手';
+            targetPosX=0;targetPosY=0;
+            return;
+        }
+        handDetected=true;
+        var lm=res.multiHandLandmarks[0];
+
+        // 手掌表观大小：手腕(0) → 中指根部(9) 的像素距离
+        rawHandSize=Math.hypot(lm[9].x-lm[0].x,lm[9].y-lm[0].y);
+
+        // 手掌中心位置（5个关键点平均）
+        var cx=(lm[0].x+lm[5].x+lm[9].x+lm[13].x+lm[17].x)/5;
+        var cy=(lm[0].y+lm[5].y+lm[9].y+lm[13].y+lm[17].y)/5;
+        targetPosX=-(cx-0.5)*params.posGain;
+        targetPosY=-(cy-0.5)*params.posGain;
+
+        // 手掌旋转
+        palmRot=Math.atan2(lm[9].y-lm[0].y,lm[9].x-lm[0].x);
+        if(!firstPalmRot){
+            var deltaRot=palmRot-lastPalmRot;
+            if(deltaRot>Math.PI)deltaRot-=Math.PI*2;
+            if(deltaRot<-Math.PI)deltaRot+=Math.PI*2;
+            if(Math.abs(deltaRot)>0.003){
+                targetRotY+=deltaRot*params.rotGain;
+            }
+        }
+        firstPalmRot=false;
+        lastPalmRot=palmRot;
+
+        // 捏合检测：拇指尖(4) → 食指尖(8)
+        var pinchDist=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
+        var nowPinching=pinchDist<PINCH_THRESHOLD;
+        if(nowPinching&&!wasPinching&&pinchCooldown<=0){
+            switchTheme((currentTheme+1)%themes.length);
+            pinchCooldown=PINCH_COOLDOWN;
+        }
+        wasPinching=nowPinching;
+        if(pinchCooldown>0)pinchCooldown--;
+
+        // 手势状态显示
+        gestureEl.style.display='block';
+        gestureEl.textContent=nowPinching?'🤏 捏合 → 切换颜色':'✋ 手掌追踪中';
+        gestureEl.style.borderColor=nowPinching?'rgba(255,170,34,0.5)':'rgba(255,255,255,0.12)';
+
+        // 用手掌大小映射缩放
+        sizeList.push(rawHandSize);
+        if(sizeList.length>MAX_SIZE_SAMPLE)sizeList.shift();
+
+        if(sizeList.length>=3){
+            var sMin=Math.min.apply(null,sizeList);
+            var sMax=Math.max.apply(null,sizeList);
+            var range=sMax-sMin;
+            if(range>0.008){
+                var t=(rawHandSize-sMin)/range;
+                t=clamp(t,0,1);
+                targetScale=params.scaleMin+t*(params.scaleMax-params.scaleMin);
+            }
+
+            // 大小指示条
+            sizeBarEl.style.display='block';
+            sizeBarFillEl.style.display='block';
+            var barH=clamp(range>0.008?(rawHandSize-sMin)/range:0.5,0,1);
+            var fillH=Math.round(barH*120);
+            sizeBarFillEl.style.height=fillH+'px';
+            sizeBarFillEl.style.bottom='60px';
+        }
+
+        statusEl.textContent='手大小:'+rawHandSize.toFixed(3)+' 缩放:'+targetScale.toFixed(2);
+    });
+    mediapipeReady=true;
+}
+
+/* ========== 键盘控制 ========== */
+var keys={};
+window.addEventListener('keydown',function(e){
+    keys[e.key]=true;
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+    if(e.key>='1'&&e.key<='5')switchTheme(parseInt(e.key)-1);
+    if(e.key===' ')createShockwave();
+});
+window.addEventListener('keyup',function(e){keys[e.key]=false});
+
+function applyKeyboard(){
+    if(keys['ArrowUp'])targetScale+=0.025;
+    if(keys['ArrowDown'])targetScale-=0.025;
+    if(keys['ArrowLeft'])targetRotY-=0.025;
+    if(keys['ArrowRight'])targetRotY+=0.025;
+}
+
+/* ========== 动画主循环 ========== */
+var lastTime=performance.now();
+
+function animate(){
+    requestAnimationFrame(animate);
+    if(!sceneReady)return;
+
+    var now=performance.now();
+    var dt=Math.min((now-lastTime)/1000,0.05);
+    lastTime=now;
+
+    applyKeyboard();
+    targetScale=clamp(targetScale,params.scaleMin,params.scaleMax);
+
+    // 平滑缩放
+    currentScale=lerp(currentScale,targetScale,params.scaleSmoothing);
+
+    // 呼吸效果
+    var breathe=Math.sin(now*0.002)*0.012;
+    var finalScale=currentScale+breathe;
+    starBall.scale.setScalar(finalScale);
+    glowBall.scale.setScalar(finalScale*1.05);
+
+    // 粒子大小随缩放变化
+    starBall.material.size=0.13*(0.6+currentScale*0.5);
+    glowBall.material.size=0.22*(0.6+currentScale*0.5);
+
+    // 位置跟随
+    currentPosX=lerp(currentPosX,targetPosX,params.posSmoothing);
+    currentPosY=lerp(currentPosY,targetPosY,params.posSmoothing);
+    starBall.position.set(currentPosX,currentPosY,0);
+    glowBall.position.set(currentPosX,currentPosY,0);
+    ring1.position.set(currentPosX,currentPosY,0);
+    ring2.position.set(currentPosX,currentPosY,0);
+
+    // 旋转
+    starBall.rotation.y+=(targetRotY-starBall.rotation.y)*0.06;
+    glowBall.rotation.y=starBall.rotation.y;
+
+    ring1.rotation.z+=0.0015;
+    ring2.rotation.z-=0.0012;
+
+    if(!handDetected){
+        targetRotY+=params.autoRotateSpeed;
+        // 无手时缓慢回中
+        targetPosX=lerp(targetPosX,0,0.015);
+        targetPosY=lerp(targetPosY,0,0.015);
+    }
+
+    updateShockwaves(dt);
+    renderer.render(scene,threeCamera);
+}
+
+/* ========== 摄像头启动 ========== */
+async function startCamera(){
+    startBtn.disabled=true;
+    if(!sceneReady){setOvText('3D场景未就绪',true);startBtn.disabled=false;return}
+    if(!mediapipeReady){setOvText('手势模块加载失败，用键盘控制',true);startBtn.disabled=false;return}
+    setOvText('请求摄像头权限，请点允许…',false);
+    try{
+        var mpCamera=new Camera(videoEl,{
+            onFrame:async function(){
+                if(videoEl.readyState<2)return;
+                try{await hands.send({image:videoEl})}catch(e){}
+            },
+            width:640,height:480
+        });
+        await Promise.race([
+            mpCamera.start(),
+            new Promise(function(_,rej){setTimeout(function(){rej(new Error('摄像头超时'))},10000)})
+        ]);
+        videoEl.style.display='block';
+        document.getElementById('overlay').style.display='none';
+        statusEl.textContent='✅ 摄像头已开启，伸出手掌试试';
+    }catch(e){
+        setOvText('摄像头失败：'+e.message+'，可重试或键盘操作',true);
+        startBtn.disabled=false;
+        startBtn.textContent='重试开启摄像头';
+    }
+}
+startBtn.addEventListener('click',startCamera);
+
+/* ========== 程序入口 ========== */
+(async function init(){
+    startBtn.disabled=true;
+    setOvText('正在加载3D与手势组件…',false);
+    var handsBase='';
+    try{
+        await loadWithFallback('Three.js',[
+            'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js',
+            'https://unpkg.com/three@0.160.0/build/three.min.js'
+        ]);
+        handsBase=await loadWithFallback('MediaPipe Hands',[
+            'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js',
+            'https://unpkg.com/@mediapipe/hands@0.4.1675469240/hands.js'
+        ]);
+        handsBase=handsBase.replace(/hands\.js$/,'');
+        await loadWithFallback('CameraUtils',[
+            'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js',
+            'https://unpkg.com/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js'
+        ]);
+        initScene();
+        initHands(handsBase);
+    }catch(err){
+        setOvText(err.message+'，键盘可用',true);
+        try{initScene()}catch(e){}
+        if(typeof Hands!=='undefined'){
+            try{initHands(handsBase||'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/')}catch(e){}
+        }
+    }
+    if(sceneReady){
+        startBtn.disabled=false;
+        startBtn.textContent='开启摄像头';
+        if(!mediapipeReady){
+            setOvText('手势加载失败，键盘：↑↓←→ 1-5换色 空格特效',true);
+        }else{
+            setOvText('点击开启摄像头；或直接键盘操作',false);
+        }
+    }
+})();
+</script>
+</body>
+</html>
